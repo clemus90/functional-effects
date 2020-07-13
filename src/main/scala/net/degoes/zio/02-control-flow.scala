@@ -13,10 +13,17 @@ object Looping extends App {
    * Implement a `repeat` combinator using `flatMap` (or `zipRight`) and recursion.
    */
   def repeat[R, E, A](n: Int)(effect: ZIO[R, E, A]): ZIO[R, E, Chunk[A]] =
-    ???
+    if (n == 0) {
+      ZIO.succeed(Chunk.empty)
+    } else {
+      for {
+        result <- effect
+        rest   <- repeat(n - 1)(effect)
+      } yield Chunk.single(result) ++ rest
+    }
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    repeat(100)(putStrLn("All work and no play makes Jack a dull boy")).exitCode
+    repeat(1000000)(putStrLn("All work and no play makes Jack a dull boy")).exitCode
 }
 
 object Interview extends App {
@@ -37,8 +44,8 @@ object Interview extends App {
    */
   def getAllAnswers(questions: List[String]): ZIO[Console, IOException, List[String]] =
     questions match {
-      case Nil     => ???
-      case q :: qs => ???
+      case Nil     => ZIO.succeed(Nil)
+      case q :: qs => (putStrLn(q) *> getStrLn.flatMap(response => getAllAnswers(qs).map(rest => response :: rest)))
     }
 
   /**
@@ -48,7 +55,7 @@ object Interview extends App {
    * `questions`, to ask the user a bunch of questions, and print the answers.
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    ???
+    getAllAnswers(questions).flatMap(answers => putStr(answers.toString())).exitCode
 }
 
 object InterviewGeneric extends App {
@@ -68,12 +75,19 @@ object InterviewGeneric extends App {
    */
   def iterateAndCollect[R, E, A, B](as: List[A])(f: A => ZIO[R, E, B]): ZIO[R, E, List[B]] =
     as match {
-      case Nil     => ???
-      case a :: as => ???
+      case Nil => ZIO.succeed(Nil)
+      case a :: as =>
+        for {
+          b  <- f(a)
+          bs <- iterateAndCollect(as)(f)
+        } yield b :: bs
     }
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    ???
+    (for {
+      responses <- iterateAndCollect(questions)(question => putStrLn(question) *> getStrLn)
+      _         <- putStrLn(responses.mkString("\n"))
+    } yield ()) exitCode
 }
 
 object InterviewForeach extends App {
@@ -94,7 +108,10 @@ object InterviewForeach extends App {
    * out the contents of the collection.
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    ???
+    (for {
+      responses <- ZIO.foreach(questions)(question => putStrLn(question) *> getStrLn)
+      _         <- putStrLn(responses.mkString("\n"))
+    } yield ()) exitCode
 }
 
 object WhileLoop extends App {
@@ -106,7 +123,17 @@ object WhileLoop extends App {
    * Implement the functional effect version of a while loop.
    */
   def whileLoop[R, E, A](cond: UIO[Boolean])(zio: ZIO[R, E, A]): ZIO[R, E, Chunk[A]] =
-    ???
+    for {
+      predicate <- cond
+      result <- predicate match {
+                 case true =>
+                   for {
+                     result  <- zio
+                     results <- whileLoop(cond)(zio)
+                   } yield Chunk(result) ++ results
+                 case false => ZIO.succeed(Chunk.empty)
+               }
+    } yield result
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] = {
     def loop(variable: Ref[Int]) =
@@ -135,12 +162,10 @@ object Iterate extends App {
    * evaluates to false, returning the "last" value of type `A`.
    */
   def iterate[R, E, A](start: A)(cond: A => Boolean)(f: A => ZIO[R, E, A]): ZIO[R, E, A] =
-    ???
+    if (cond(start)) f(start).flatMap(newA => iterate(newA)(cond)(f)) else ZIO.succeed(start)
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    iterate(0)(_ < 100) { i =>
-      putStrLn(s"At iteration: ${i}") as (i + 1)
-    }.exitCode
+    iterate(0)(_ < 100)(i => putStrLn(s"At iteration: ${i}") as (i + 1)).exitCode
 }
 
 object TailRecursive extends App {
@@ -168,12 +193,9 @@ object TailRecursive extends App {
    * recursive.
    */
   lazy val webserver: Task[Nothing] =
-    for {
-      request  <- acceptRequest
-      response <- handleRequest(request)
-      _        <- request.returnResponse(response)
-      nothing  <- webserver
-    } yield nothing
+    acceptRequest.flatMap(request =>
+      handleRequest(request).flatMap(response => request.returnResponse(response).flatMap(_ => webserver))
+    )
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
     (for {

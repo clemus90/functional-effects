@@ -16,7 +16,12 @@ object ForkJoin extends App {
    * and finally, print out a message "Joined".
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    printer.exitCode
+    (for {
+      fiber <- printer.fork
+      _     <- putStrLn("Forked")
+      _     <- fiber.join
+      _     <- putStrLn("Joined")
+    } yield ()).exitCode
 }
 
 object ForkInterrupt extends App {
@@ -35,7 +40,10 @@ object ForkInterrupt extends App {
    * finally, print out a message "Interrupted".
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    (infinitePrinter *> ZIO.sleep(10.millis)).exitCode
+    (for {
+      fiber <- infinitePrinter.fork
+      _     <- ZIO.sleep(10.millis) *> fiber.interrupt *> putStrLn("Interrupted")
+    } yield ()).exitCode
 }
 
 object ParallelFib extends App {
@@ -47,14 +55,14 @@ object ParallelFib extends App {
    * Rewrite this implementation to compute nth fibonacci number in parallel.
    */
   def fib(n: Int): UIO[BigInt] = {
-    def loop(n: Int, original: Int): UIO[BigInt] =
+    def loop(n: Int): UIO[BigInt] =
       if (n <= 1) UIO(n)
       else
         UIO.effectSuspendTotal {
-          (loop(n - 1, original) zipWith loop(n - 2, original))(_ + _)
+          (loop(n - 1) zipWithPar loop(n - 2))(_ + _)
         }
 
-    loop(n, n)
+    loop(n)
   }
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
@@ -100,7 +108,12 @@ object AlarmAppImproved extends App {
    * prints out a wakeup alarm message, like "Time to wakeup!!!".
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, ExitCode] =
-    ???
+    (for {
+      duration <- getAlarmDuration
+      fiber    <- ZIO.uninterruptible((putStr(".")) *> ZIO.interruptible(ZIO.sleep(1.second))).forever.fork
+      _        <- ZIO.sleep(duration) *> fiber.interrupt
+      -        <- putStrLn("Time to wakeup!!!")
+    } yield ()).exitCode
 }
 
 object ComputePi extends App {
@@ -263,9 +276,7 @@ object StmQueue extends App {
     for {
       queue <- Queue.bounded[Int](10)
       _     <- ZIO.foreach(0 to 100)(i => queue.offer(i)).fork
-      _ <- ZIO.foreach(0 to 100)(
-            _ => queue.take.flatMap(i => putStrLn(s"Got: ${i}"))
-          )
+      _     <- ZIO.foreach(0 to 100)(_ => queue.take.flatMap(i => putStrLn(s"Got: ${i}")))
     } yield ExitCode.success
 }
 
@@ -333,12 +344,11 @@ object StmLunchTime extends App {
     val TableSize = 5
 
     for {
-      attendees <- ZIO.foreach(0 to Attendees)(
-                    i =>
-                      TRef
-                        .make[Attendee.State](Attendee.State.Starving)
-                        .map(Attendee(_))
-                        .commit
+      attendees <- ZIO.foreach(0 to Attendees)(i =>
+                    TRef
+                      .make[Attendee.State](Attendee.State.Starving)
+                      .map(Attendee(_))
+                      .commit
                   )
       table <- TArray
                 .fromIterable(List.fill(TableSize)(false))
@@ -495,10 +505,8 @@ object StmDiningPhilosophers extends App {
     val makeFork = TRef.make[Option[Fork]](Some(Fork))
 
     (for {
-      allForks0 <- STM.foreach(0 to size) { i =>
-                    makeFork
-                  }
-      allForks = allForks0 ++ List(allForks0(0))
+      allForks0 <- STM.foreach(0 to size)(i => makeFork)
+      allForks  = allForks0 ++ List(allForks0(0))
       placements = (allForks zip allForks.drop(1)).map {
         case (l, r) => Placement(l, r)
       }
@@ -526,9 +534,7 @@ object StmDiningPhilosophers extends App {
     val count = 10
 
     def eaters(table: Roundtable): Iterable[ZIO[Console, Nothing, Unit]] =
-      (0 to count).map { index =>
-        eat(index, table)
-      }
+      (0 to count).map(index => eat(index, table))
 
     for {
       table <- setupTable(count)
